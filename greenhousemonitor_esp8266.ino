@@ -17,58 +17,134 @@
 #include <WiFiClientSecure.h>
 #include <WEMOS_SHT3X.h>
 
+//needed for library
+#include <DNSServer.h>
+#include <ESP8266WebServer.h>
+#include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager
+
+//for LED status
+#include <Ticker.h>
+Ticker ticker;
+
 SHT3X sht30(0x45);
 
-const char* ssid = "........";
-const char* password = "........";
+void tick()
+{
+  //toggle state
+  int state = digitalRead(BUILTIN_LED);  // get the current state of GPIO1 pin
+  digitalWrite(BUILTIN_LED, !state);     // set pin to the opposite state
+}
 
-const char* host = "api.github.com";
+//gets called when WiFiManager enters configuration mode
+void configModeCallback (WiFiManager *myWiFiManager) {
+  Serial.println("Entered config mode");
+  Serial.println(WiFi.softAPIP());
+  //if you used auto generated SSID, print it
+  Serial.println(myWiFiManager->getConfigPortalSSID());
+  //entered config mode, make led toggle faster
+  ticker.attach(0.2, tick);
+}
+
+
+
+const char* ssid = "Bzest";
+const char* password = "b1a8cabd8c3639252";
+
+//const char* host[] = "178.62.107.140";
+//const char* host = "178.62.107.140";
+const char* server = "raspinall.me";
+
 const int httpsPort = 443;
 
-// Use web browser to view and copy
-// SHA1 fingerprint of the certificate
-const char* fingerprint = "5F F1 60 31 09 04 3E F2 90 D2 B0 8A 50 38 04 E8 37 9F BC 76";
 
 void setup() {
+   // put your setup code here, to run once:
   Serial.begin(115200);
-  Serial.println();
-  Serial.print("connecting to ");
-  Serial.println(ssid);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  
+  //set led pin as output
+  pinMode(BUILTIN_LED, OUTPUT);
+  // start ticker with 0.5 because we start in AP mode and try to connect
+  ticker.attach(0.6, tick);
+
+  //WiFiManager
+  //Local intialization. Once its business is done, there is no need to keep it around
+  WiFiManager wifiManager;
+  //reset settings - for testing
+  //wifiManager.resetSettings();
+
+  //set callback that gets called when connecting to previous WiFi fails, and enters Access Point mode
+  wifiManager.setAPCallback(configModeCallback);
+
+  //fetches ssid and pass and tries to connect
+  //if it does not connect it starts an access point with the specified name
+  //here  "AutoConnectAP"
+  //and goes into a blocking loop awaiting configuration
+  if (!wifiManager.autoConnect()) {
+    Serial.println("failed to connect and hit timeout");
+    //reset and try again, or maybe put it to deep sleep
+    ESP.reset();
+    delay(1000);
   }
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
+
+  //if you get here you have connected to the WiFi
+  Serial.println("connected...yeey :)");
+  ticker.detach();
+  //keep LED on
+  digitalWrite(BUILTIN_LED, LOW);
 }
 
 void loop() {
-   // Use WiFiClientSecure class to create TLS connection
+
+  //Serial.setDebugOutput(true);
+  // Use WiFiClientSecure class to create TLS connection
   WiFiClientSecure client;
-  Serial.print("connecting to ");
-  Serial.println(host);
-  if (!client.connect(host, httpsPort)) {
+  Serial.println("connecting to Server");
+  //Serial.println(server);
+  if (!client.connect(server, httpsPort)) {
     Serial.println("connection failed");
     return;
   }
-
-  if (client.verify(fingerprint, host)) {
-    Serial.println("certificate matches");
-  } else {
-    Serial.println("certificate doesn't match");
-  }
-
   
-  const String post =   "POST /temp HTTP/1.1\r\n"
-                          "User-Agent: Arduino/1.0\r\n"
-                          "Connection: close\r\n"
-                          "Content-Type: application/x-www-form-urlencoded;\r\n"
-                          "\r\n"
-                          "humidity=" + String(sht30.cTemp) + "&temp=" + String(sht30.humidity) + "\n";
+if(sht30.get()==0){
+    Serial.print("Tempermture in Celsius : ");
+    Serial.println(sht30.cTemp);
+    Serial.print("Temperature in Fahrenheit : ");
+    Serial.println(sht30.fTemp);
+    Serial.print("Relative Humidity : ");
+    Serial.println(sht30.humidity);
+    Serial.println();
+    
+    String url = "/api/temp?sensorid=2&temp=" + String(sht30.cTemp) + "&humidity=" + String(sht30.humidity) + "&accessToken=b1a8cabd8c";
+    Serial.print("requesting URL: ");
+    Serial.println(url);
+  
+    client.print(String("POST ") + url + " HTTP/1.1\r\n" +
+                 "Host: " + server + "\r\n" +
+                 "User-Agent: BuildFailureDetectorESP8266\r\n" +
+                 "Connection: close\r\n\r\n");
+  
+    Serial.println("request sent");
+    while (client.connected()) {
+      String line = client.readStringUntil('\n');
+      if (line == "\r") {
+        Serial.println("headers received");
+        break;
+      }
+    }
+    String line = client.readStringUntil('\n');
 
-  client.print(post);
+    Serial.println("reply was:");
+    Serial.println("==========");
+    Serial.println(line);
+    Serial.println("==========");
+    Serial.println("closing connection");
+  
+  }
+  else
+  {
+    Serial.println("Error!");
+  }
+ 
+    delay(10000);
+
 }
